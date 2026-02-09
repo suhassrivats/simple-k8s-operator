@@ -2,6 +2,19 @@
 
 Comprehensive resources for understanding how etcd works in your Kubernetes cluster and how your operators interact with it.
 
+## 📑 Table of Contents
+
+- [Quick Start](#-quick-start) - Get started in 30 seconds
+- [Common Commands](#-common-commands) - etcd-explorer.sh usage
+- [Understanding etcd](#-understanding-etcd) - Core concepts
+  - [Revision System Deep Dive](#deep-dive-etcds-revision-system) - Counters explained
+  - [Update Mechanism](#what-happens-during-an-update) - Step-by-step trace
+  - [MVCC in Action](#mvcc-in-action) - Time travel and history
+- [Direct etcd Access](#-accessing-etcd-directly) - Using etcdctl
+- [Inspecting Revisions](#-inspecting-revisions-and-versions) - Hands-on experiments
+- [Troubleshooting](#️-troubleshooting) - Debug like a pro
+- [Quick Reference](#-quick-reference-card) - Cheat sheet
+
 ## 🚀 Quick Start
 
 ```bash
@@ -14,6 +27,16 @@ Comprehensive resources for understanding how etcd works in your Kubernetes clus
 # Watch changes in real-time
 ./scripts/etcd-explorer.sh watch /registry/demo.mycompany.com
 ```
+
+## 📁 What You'll Learn
+
+This guide covers:
+- ✅ **etcd fundamentals** - How Kubernetes stores all its state
+- ✅ **Revision system** - Understanding version counters and MVCC
+- ✅ **Direct access** - Using etcdctl for advanced debugging
+- ✅ **Operator integration** - How your custom operators interact with etcd
+- ✅ **Troubleshooting** - Debug issues using revision tracking
+- ✅ **Practical examples** - Hands-on experiments and real-world scenarios
 
 ## 📁 Structure
 
@@ -271,6 +294,292 @@ When you create or update a custom resource:
 
 For comprehensive documentation, tutorials, and advanced topics, see the `docs/` directory (to be added).
 
+## 🔌 Accessing etcd Directly
+
+While the `etcd-explorer.sh` script provides convenience, you can also access etcd directly using `etcdctl`. This is useful for advanced debugging and understanding the raw data.
+
+### Prerequisites
+
+etcd in Kubernetes requires TLS authentication. You'll need:
+- CA certificate
+- Client certificate  
+- Client key
+
+### Access etcd Pod
+
+```bash
+# Find etcd pod (for kubeadm clusters)
+kubectl get pods -n kube-system | grep etcd
+
+# Shell into etcd pod
+kubectl exec -it -n kube-system etcd-<node-name> -- sh
+
+# Or for single-node clusters
+kubectl exec -it -n kube-system $(kubectl get pods -n kube-system -l component=etcd -o name | head -1) -- sh
+```
+
+### Set etcdctl Environment Variables
+
+```bash
+# Inside etcd pod, set these variables
+export ETCDCTL_API=3
+export ETCDCTL_CACERT=/etc/kubernetes/pki/etcd/ca.crt
+export ETCDCTL_CERT=/etc/kubernetes/pki/etcd/server.crt
+export ETCDCTL_KEY=/etc/kubernetes/pki/etcd/server.key
+export ETCDCTL_ENDPOINTS=https://127.0.0.1:2379
+
+# Or set them inline (if not in pod)
+alias etcdctl='kubectl exec -it -n kube-system <etcd-pod> -- etcdctl \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  --endpoints=https://127.0.0.1:2379'
+```
+
+### Basic etcdctl Commands
+
+#### Cluster Health and Status
+```bash
+# Check cluster health
+etcdctl endpoint health
+# Output: 127.0.0.1:2379 is healthy: successfully committed proposal
+
+# Get cluster status
+etcdctl endpoint status --write-out=table
+# Shows: Endpoint, ID, Version, DB Size, Leader, Raft Term, Raft Index
+
+# List cluster members
+etcdctl member list --write-out=table
+```
+
+#### Reading Keys
+
+```bash
+# Get a specific key
+etcdctl get /registry/configmaps/default/my-configmap
+
+# Get with metadata (shows ModRevision, Version, etc.)
+etcdctl get /registry/configmaps/default/my-configmap -w json | jq
+
+# Get all keys with a prefix
+etcdctl get /registry/configmaps/ --prefix
+
+# Get only keys (not values)
+etcdctl get /registry/configmaps/ --prefix --keys-only
+
+# Count keys with prefix
+etcdctl get /registry/configmaps/ --prefix --keys-only | wc -l
+
+# Get key at specific revision (time travel!)
+etcdctl get /registry/configmaps/default/my-configmap --rev=1000
+```
+
+#### Listing and Searching
+
+```bash
+# List all keys in Kubernetes registry
+etcdctl get /registry/ --prefix --keys-only
+
+# Search for specific resource
+etcdctl get /registry/ --prefix --keys-only | grep "my-resource"
+
+# List all custom resources
+etcdctl get /registry/demo.mycompany.com/ --prefix --keys-only
+
+# Count resources by type
+etcdctl get /registry/deployments/ --prefix --keys-only | wc -l
+etcdctl get /registry/pods/ --prefix --keys-only | wc -l
+etcdctl get /registry/configmaps/ --prefix --keys-only | wc -l
+```
+
+#### Watching for Changes
+
+```bash
+# Watch a specific key
+etcdctl watch /registry/configmaps/default/my-configmap
+
+# Watch all keys with prefix
+etcdctl watch /registry/demo.mycompany.com/configmapapps/ --prefix
+
+# Watch from specific revision
+etcdctl watch /registry/configmaps/ --prefix --rev=5000
+
+# Watch with JSON output for parsing
+etcdctl watch /registry/configmaps/ --prefix -w json
+
+# Interactive watch (shows PUT/DELETE events in real-time)
+etcdctl watch /registry/ --prefix
+```
+
+#### Revision and Version Information
+
+```bash
+# Get current cluster revision
+etcdctl endpoint status --write-out=table | awk 'NR==2 {print $5}'
+
+# Get key with full metadata
+etcdctl get /registry/configmaps/default/my-cm -w json | jq '{
+  key: .kvs[0].key | @base64d,
+  create_revision: .kvs[0].create_revision,
+  mod_revision: .kvs[0].mod_revision,
+  version: .kvs[0].version,
+  lease: .kvs[0].lease
+}'
+
+# Get multiple keys with metadata
+etcdctl get /registry/configmaps/ --prefix --limit=5 -w json | jq -r '
+  .kvs[] | "\(.key | @base64d) | Rev:\(.mod_revision) | Ver:\(.version)"
+'
+```
+
+#### Database Management
+
+```bash
+# Check database size
+etcdctl endpoint status --write-out=table
+
+# Get detailed DB size
+du -sh /var/lib/etcd
+
+# Check compaction revision
+etcdctl endpoint status -w json | jq '.[] | .Status.dbSize, .Status.raftAppliedIndex'
+
+# Compact to specific revision (careful!)
+# This removes history before revision 5000
+etcdctl compact 5000
+
+# Defragment database (reclaim space after compaction)
+etcdctl defrag
+
+# Check alarm status (disk space issues)
+etcdctl alarm list
+```
+
+#### Advanced Queries
+
+```bash
+# Get all pods in a namespace
+etcdctl get /registry/pods/default/ --prefix --keys-only
+
+# Get all resources of a specific API group
+etcdctl get /registry/demo.mycompany.com/ --prefix --keys-only
+
+# Watch for deletions only
+etcdctl watch /registry/configmaps/ --prefix | grep DELETE
+
+# Get key range
+etcdctl get /registry/configmaps/default/a /registry/configmaps/default/z
+
+# Get last N keys
+etcdctl get /registry/configmaps/ --prefix --limit=10 --order=DESCEND --sort-by=MODIFY
+
+# Get keys modified after specific revision
+etcdctl get /registry/ --prefix --rev=5000 | \
+  etcdctl get /registry/ --prefix --rev=5100 | diff - -
+```
+
+### Decode Kubernetes Objects
+
+etcd stores Kubernetes objects in protobuf format. To decode:
+
+```bash
+# Get raw value
+etcdctl get /registry/configmaps/default/my-cm --print-value-only > /tmp/cm.pb
+
+# Kubernetes API server can decode it, but raw etcd data is protobuf
+# For human-readable output, use kubectl instead:
+kubectl get configmap my-cm -o yaml
+
+# Or decode using protoc (if you have proto definitions)
+protoc --decode_raw < /tmp/cm.pb
+```
+
+### Practical Examples
+
+#### Example 1: Find Who's Using Disk Space
+```bash
+# Count keys by resource type
+for type in pods deployments configmaps secrets services; do
+  count=$(etcdctl get /registry/$type/ --prefix --keys-only 2>/dev/null | wc -l)
+  echo "$type: $count"
+done
+```
+
+#### Example 2: Track Operator's Resource Creation
+```bash
+# Watch custom resources and their children
+etcdctl watch /registry/demo.mycompany.com/configmapapps/ --prefix &
+etcdctl watch /registry/deployments/default/ --prefix &
+etcdctl watch /registry/configmaps/default/ --prefix &
+
+# Now create a custom resource and see the cascade
+```
+
+#### Example 3: Debug Stale Reads
+```bash
+# Get current revision
+CURRENT_REV=$(etcdctl endpoint status -w json | jq -r '.[0].Status.header.revision')
+echo "Current revision: $CURRENT_REV"
+
+# Get resource at current revision
+etcdctl get /registry/configmaps/default/my-cm --rev=$CURRENT_REV
+
+# Get resource at older revision
+OLD_REV=$((CURRENT_REV - 100))
+etcdctl get /registry/configmaps/default/my-cm --rev=$OLD_REV
+```
+
+#### Example 4: Monitor Cluster Activity
+```bash
+# Check how fast revisions are growing
+REV1=$(etcdctl endpoint status -w json | jq -r '.[0].Status.header.revision')
+sleep 60
+REV2=$(etcdctl endpoint status -w json | jq -r '.[0].Status.header.revision')
+echo "Revisions per minute: $((REV2 - REV1))"
+```
+
+### ⚠️ WARNING: Write Operations
+
+**DO NOT** perform write operations on etcd directly unless you know exactly what you're doing!
+
+```bash
+# ❌ DANGEROUS - Don't do this!
+etcdctl put /registry/configmaps/default/my-cm "..."
+
+# ❌ DANGEROUS - Can corrupt cluster state!
+etcdctl del /registry/pods/default/my-pod
+
+# ✅ SAFE - Always use kubectl for modifications
+kubectl delete pod my-pod
+kubectl apply -f resource.yaml
+```
+
+Writing directly to etcd bypasses:
+- Kubernetes validation
+- Admission webhooks
+- RBAC authorization
+- Audit logging
+- API server logic
+
+**Only use writes for:**
+- Disaster recovery (with expert guidance)
+- Removing stuck finalizers (as last resort)
+- Advanced debugging (development clusters only)
+
+### Remote Access (Outside Cluster)
+
+```bash
+# Port-forward etcd (be careful with this!)
+kubectl port-forward -n kube-system etcd-<node-name> 2379:2379
+
+# In another terminal, use etcdctl locally (requires certs)
+etcdctl --endpoints=https://localhost:2379 \
+  --cacert=./ca.crt \
+  --cert=./client.crt \
+  --key=./client.key \
+  get /registry/configmaps/default/my-cm
+```
+
 ## 🔬 Inspecting Revisions and Versions
 
 Want to see these counters in action? Here's how:
@@ -386,6 +695,80 @@ kubectl get configmapapp my-app -o yaml | grep resourceVersion
 
 ```bash
 ./scripts/etcd-explorer.sh help
+```
+
+## 📋 Quick Reference Card
+
+### etcdctl Cheat Sheet
+
+```bash
+# === CLUSTER STATUS ===
+etcdctl endpoint health                    # Check health
+etcdctl endpoint status -w table          # Cluster status
+etcdctl member list -w table              # List members
+
+# === READ OPERATIONS ===
+etcdctl get <key>                         # Get specific key
+etcdctl get <key> -w json                 # Get with metadata
+etcdctl get <key> --rev=1000              # Get at revision 1000
+etcdctl get <prefix> --prefix             # Get all with prefix
+etcdctl get <prefix> --prefix --keys-only # List keys only
+etcdctl get <prefix> --prefix --limit=10  # Limit results
+
+# === WATCH OPERATIONS ===
+etcdctl watch <key>                       # Watch key
+etcdctl watch <prefix> --prefix           # Watch prefix
+etcdctl watch <prefix> --prefix --rev=100 # Watch from revision
+
+# === DATABASE INFO ===
+etcdctl endpoint status -w table          # DB size & revision
+etcdctl compact <revision>                # Compact to revision
+etcdctl defrag                            # Defragment DB
+etcdctl alarm list                        # Check alarms
+
+# === COMMON KUBERNETES PATHS ===
+/registry/pods/<namespace>/<name>
+/registry/deployments/<namespace>/<name>
+/registry/configmaps/<namespace>/<name>
+/registry/secrets/<namespace>/<name>
+/registry/services/<namespace>/<name>
+/registry/<apigroup>/<resource>/<namespace>/<name>
+```
+
+### Environment Setup
+
+```bash
+# Copy-paste this block when accessing etcd pod:
+export ETCDCTL_API=3
+export ETCDCTL_CACERT=/etc/kubernetes/pki/etcd/ca.crt
+export ETCDCTL_CERT=/etc/kubernetes/pki/etcd/server.crt
+export ETCDCTL_KEY=/etc/kubernetes/pki/etcd/server.key
+export ETCDCTL_ENDPOINTS=https://127.0.0.1:2379
+```
+
+### One-Liners
+
+```bash
+# Current cluster revision
+etcdctl endpoint status -w json | jq -r '.[0].Status.header.revision'
+
+# Count all keys
+etcdctl get / --prefix --keys-only | wc -l
+
+# Count pods
+etcdctl get /registry/pods/ --prefix --keys-only | wc -l
+
+# Database size in MB
+etcdctl endpoint status -w json | jq -r '.[0].Status.dbSize / 1024 / 1024'
+
+# List all namespaces
+etcdctl get /registry/namespaces/ --prefix --keys-only | sed 's|/registry/namespaces/||'
+
+# Watch all changes (live feed)
+etcdctl watch / --prefix
+
+# Get latest modified keys
+etcdctl get / --prefix --limit=10 --order=DESCEND --sort-by=MODIFY --keys-only
 ```
 
 ---
