@@ -6,6 +6,5 @@ spec:
   image: nginx
   replicas: 2
   configData:
-    key1: "value1"
-    key2: "value2"
-    key3: "value3"
+    app.conf: "server { listen 80; }"
+    database.conf: "host=localhost"
