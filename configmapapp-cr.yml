@@ -1,0 +1,11 @@
+apiVersion: demo.mycompany.com/v1
+kind: ConfigMapApp
+metadata:
+  name: my-nginx-app
+spec:
+  image: nginx
+  replicas: 2
+  configData:
+    key1: "value1"
+    key2: "value2"
+    key3: "value3"

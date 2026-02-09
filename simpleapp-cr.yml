@@ -1,0 +1,7 @@
+apiVersion: demo.mycompany.com/v1
+kind: SimpleApp
+metadata:
+  name: nginx-app
+spec:
+  image: nginx
+  replicas: 3
