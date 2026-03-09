@@ -51,13 +51,11 @@ Control Plane
 Cloud Infrastructure
 ```
 
-Below is a **Principal/Senior SRE Kubernetes Troubleshooting Matrix**. This is the kind of **structured mental model** engineers at companies like Google, Meta, and Netflix use during incidents.
-
-It maps **production symptoms → probable root cause → commands to confirm**.
-
 ---
 
-# Principal SRE Kubernetes Troubleshooting Matrix
+# Kubernetes Troubleshooting Matrix
+
+It maps **production symptoms → probable root cause → commands to confirm**.
 
 | Symptom                               | Likely Layer     | Possible Root Cause               | Commands to Check                                   |
 | ------------------------------------- | ---------------- | --------------------------------- | --------------------------------------------------- |
@@ -168,7 +166,7 @@ netstat
 
 ---
 
-# Senior SRE Troubleshooting Strategy
+# Troubleshooting Strategy
 
 | Layer         | What to Check            |
 | ------------- | ------------------------ |
